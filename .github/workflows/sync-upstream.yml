@@ -1,0 +1,68 @@
+name: Sync with upstream
+
+on:
+  schedule:
+    - cron: '23 8,20 * * *'  # Twice daily: 08:23 & 20:23 UTC (05:23 & 17:23 Brasília)
+  workflow_dispatch:
+
+permissions:
+  contents: write  # push the rebase
+  actions: write   # disable upstream-inherited workflows
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0  # full history, required for the rebase
+
+      - name: Rebase main onto upstream and push
+        run: |
+          set -euo pipefail
+          # The rebase needs a committer identity; the author of each replayed
+          # commit is preserved.
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git remote add upstream https://github.com/anthropics/knowledge-work-plugins.git
+          git fetch upstream main
+
+          # Already up to date? Nothing to sync (the next step still runs).
+          if git merge-base --is-ancestor upstream/main HEAD; then
+            echo "Fork is already up to date with upstream."
+            exit 0
+          fi
+
+          git rebase upstream/main
+          git push --force-with-lease origin main
+
+      - name: Disable inherited upstream workflows
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # Paths to KEEP, comma-separated: this workflow itself plus any workflows
+          # of YOUR OWN created in the fork in the future. Every active workflow
+          # outside this list (i.e. inherited from upstream) gets disabled —
+          # including future ones.
+          export KEEP='.github/workflows/sync-upstream.yml'
+          ids=$(gh api "repos/${{ github.repository }}/actions/workflows" --paginate \
+            --jq '.workflows[]
+                  | . as $wf
+                  | select((env.KEEP | split(",") | map(rtrimstr(" ")) | index($wf.path)) | not)
+                  | select(.state == "active")
+                  | .id')
+          if [ -z "$ids" ]; then
+            echo "No inherited workflows to disable."
+            exit 0
+          fi
+          for id in $ids; do
+            echo "Disabling workflow id $id..."
+            gh api -X PUT "repos/${{ github.repository }}/actions/workflows/$id/disable"
+          done
