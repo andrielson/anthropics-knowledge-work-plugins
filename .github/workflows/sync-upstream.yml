@@ -6,8 +6,9 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write  # push the rebase
-  actions: write   # disable upstream-inherited workflows
+  contents: write   # push the rebase
+  actions: write    # disable upstream-inherited workflows
+  workflows: write  # upstream commits can touch files under .github/workflows/
 
 concurrency:
   group: sync-upstream
